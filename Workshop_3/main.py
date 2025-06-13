@@ -13,7 +13,7 @@ def split_state(full_state, agent_id, total_agents=2):
 def train_multi_agent(agent_type="q", episodes=100):
     env = IntersectionEnv()
     state_size = len(split_state(env.reset(), 0))
-    action_size = 4  # N, E, S, W directions
+    action_size = 4
 
     if agent_type == "q":
         agentA = QLearningAgent(state_size, action_size)
@@ -26,6 +26,8 @@ def train_multi_agent(agent_type="q", episodes=100):
 
     rewards = []
     avg_queues = []
+    ped_served_list = []
+    ped_wait_list = []
 
     for ep in range(episodes):
         full_state = env.reset()
@@ -64,14 +66,18 @@ def train_multi_agent(agent_type="q", episodes=100):
         rewards.append(total_reward)
         avg_queues.append(avg_queue)
 
-        print(f"[{agent_type.upper()}] Episode {ep+1} - Total Reward: {total_reward:.1f}, AvgQueue: {avg_queue:.2f}")
+        served, avg_wait = env.get_pedestrian_metrics()
+        ped_served_list.append(served)
+        ped_wait_list.append(avg_wait)
+
+        print(f"[{agent_type.upper()}] Ep {ep+1}: Reward={total_reward:.1f}, Queue={avg_queue:.2f}, Peds={served}, Wait={avg_wait:.2f}")
 
     # Save results
     with open("training_metrics.csv", mode="w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["Episode", "TotalReward", "AvgVehicleQueue"])
+        writer.writerow(["Episode", "TotalReward", "AvgVehicleQueue", "PedestriansServed", "AvgPedestrianWait"])
         for i in range(episodes):
-            writer.writerow([i+1, rewards[i], avg_queues[i]])
+            writer.writerow([i+1, rewards[i], avg_queues[i], ped_served_list[i], ped_wait_list[i]])
 
     return rewards
 

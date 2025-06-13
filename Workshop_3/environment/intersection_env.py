@@ -7,8 +7,7 @@ class IntersectionEnv(gym.Env):
         super().__init__()
 
         self.num_intersections = 2
-        self.num_directions = 4  # 0=N, 1=E, 2=S, 3=W
-
+        self.num_directions = 4  # N, E, S, W
         self.crossing_duration = 3
         self.vehicle_pass_rate = 2
         self.right_turn_limit = 3
@@ -17,8 +16,6 @@ class IntersectionEnv(gym.Env):
         self.action_space = spaces.MultiDiscrete([self.num_directions] * self.num_intersections)
         self.observation_space = spaces.Box(low=0, high=1, shape=(self.state_size,), dtype=np.float32)
 
-        self.buffer_A_to_B = np.zeros(self.num_directions, dtype=int)
-        self.buffer_B_to_A = np.zeros(self.num_directions, dtype=int)
         self.reset()
 
     def reset(self):
@@ -28,22 +25,26 @@ class IntersectionEnv(gym.Env):
         self.signals = np.zeros_like(self.queues)
         self.signal_timer = np.zeros_like(self.queues)
 
-        # vehicle transfer buffer: [A→B], [B→A]
         self.buffer_A_to_B = np.zeros(self.num_directions, dtype=int)
         self.buffer_B_to_A = np.zeros(self.num_directions, dtype=int)
 
+        # Tracking metrics
+        self.ped_wait_time = np.zeros_like(self.ped_requests)
+        self.pedestrians_served = 0
+        self.total_ped_wait_accum = 0
 
         return self._get_state()
 
     def step(self, actions):
         rewards = []
 
-        for inter_id, action_dir in enumerate(actions):
-            reward = self._process_intersection(inter_id, action_dir)
+        for idx, action_dir in enumerate(actions):
+            reward = self._process_intersection(idx, action_dir)
             rewards.append(reward)
 
         self._update_signal_timers(actions)
         self._update_pedestrian_timers()
+        self._update_pedestrian_waits()
         self._transfer_vehicles()
 
         return self._get_state(), sum(rewards), False, {}
@@ -69,7 +70,10 @@ class IntersectionEnv(gym.Env):
 
         if ped_waiting and not ped_crossing:
             self.ped_timers[inter_id][action_dir] = self.crossing_duration
+            self.total_ped_wait_accum += self.ped_wait_time[inter_id][action_dir]
+            self.ped_wait_time[inter_id][action_dir] = 0
             self.ped_requests[inter_id][action_dir] = 0
+            self.pedestrians_served += 1
             reward += 3.0
 
         for dir_id in range(self.num_directions):
@@ -79,21 +83,18 @@ class IntersectionEnv(gym.Env):
         return reward
 
     def _buffer_vehicle(self, inter_id, exit_dir, count):
-        """
-        Determine where to send vehicles from this intersection.
-        """
         if count == 0:
             return
 
         if inter_id == 0:
-            if exit_dir == 0:    # A[N] → B[S]
+            if exit_dir == 0:
                 self.buffer_A_to_B[2] += count
-            elif exit_dir == 1:  # A[E] (right turn) → B[N]
+            elif exit_dir == 1:
                 self.buffer_A_to_B[0] += count
         elif inter_id == 1:
-            if exit_dir == 2:    # B[S] → A[N]
+            if exit_dir == 2:
                 self.buffer_B_to_A[0] += count
-            elif exit_dir == 3:  # B[W] (right turn) → A[S]
+            elif exit_dir == 3:
                 self.buffer_B_to_A[2] += count
 
     def _transfer_vehicles(self):
@@ -116,9 +117,18 @@ class IntersectionEnv(gym.Env):
                 if self.ped_timers[i][d] > 0:
                     self.ped_timers[i][d] -= 1
 
+    def _update_pedestrian_waits(self):
+        self.ped_wait_time += self.ped_requests  # only active requests accumulate wait time
+
     def _get_state(self):
         norm_queues = self.queues.flatten() / 10.0
         ped_waiting = self.ped_requests.flatten()
         ped_crossing = (self.ped_timers > 0).astype(float).flatten()
         signal_status = self.signals.flatten()
         return np.concatenate([norm_queues, ped_waiting, ped_crossing, signal_status])
+
+    def get_pedestrian_metrics(self):
+        avg_wait = 0.0
+        if self.pedestrians_served > 0:
+            avg_wait = self.total_ped_wait_accum / self.pedestrians_served
+        return self.pedestrians_served, avg_wait
