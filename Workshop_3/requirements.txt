@@ -1,0 +1,6 @@
+numpy
+matplotlib
+gym
+torch
+tensorflow
+scikit-learn
